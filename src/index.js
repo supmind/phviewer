@@ -8,9 +8,11 @@ export default {
       return new Response(HTML, {
         headers: { "Content-Type": "text/html" },
       });
-    } else if (path.startsWith("/video")) {
-      return handleVideo(request);
-    } else if (path.startsWith("/thumbnail")) {
+    } else if (path === "/video") {
+      return handleVideo(request, url);
+    } else if (path.startsWith("/proxy/")) {
+      return handleProxy(request, url);
+    } else if (path === "/thumbnail") {
       return handleThumbnail(request);
     } else {
       return new Response("Not Found", { status: 404 });
@@ -39,9 +41,29 @@ function parseFlashvars(html) {
   return JSON.parse(flashvarsMatch[1]);
 }
 
-async function handleVideo(request) {
-  const url = new URL(request.url);
-  const viewkey = url.searchParams.get("viewkey");
+async function rewriteM3u8(m3u8Text, baseUrl) {
+  const lines = m3u8Text.split('\n');
+  const rewrittenLines = lines.map(line => {
+    line = line.trim();
+    if (line.length > 0 && !line.startsWith('#')) {
+      const segmentUrl = new URL(line, baseUrl);
+      return `/proxy/${segmentUrl.href}`;
+    }
+    if (line.startsWith('#EXT-X-KEY')) {
+        const uriMatch = line.match(/URI="([^"]+)"/);
+        if (uriMatch && uriMatch[1]) {
+            const keyUri = new URL(uriMatch[1], baseUrl);
+            const proxiedKeyUri = `/proxy/${keyUri.href}`;
+            return line.replace(uriMatch[1], proxiedKeyUri);
+        }
+    }
+    return line;
+  });
+  return rewrittenLines.join('\n');
+}
+
+async function handleVideo(request, requestUrl) {
+  const viewkey = requestUrl.searchParams.get("viewkey");
   if (!viewkey) {
     return new Response("Missing viewkey", { status: 400 });
   }
@@ -50,32 +72,57 @@ async function handleVideo(request) {
     const html = await getPornhubPage(viewkey);
     const flashvars = parseFlashvars(html);
 
-    // Extract video URL from flashvars (this will need adjustment based on actual structure)
     const mediaDefinitions = flashvars.mediaDefinitions;
     let videoUrl = '';
     if (mediaDefinitions) {
-        const highQuality = mediaDefinitions.find(m => m.quality === "720");
-        if(highQuality) {
-            videoUrl = highQuality.videoUrl;
-        } else {
-            videoUrl = mediaDefinitions[0].videoUrl;
-        }
+      const hlsMedia = mediaDefinitions.filter(m => m.format === 'hls');
+      const highQuality = hlsMedia.find(m => m.quality === "720");
+      videoUrl = highQuality ? highQuality.videoUrl : (hlsMedia.length > 0 ? hlsMedia[0].videoUrl : '');
     }
 
     if (!videoUrl) {
-      return new Response("Could not find video URL", { status: 500 });
+      return new Response("Could not find HLS video URL", { status: 500 });
     }
 
-    // Proxy the video
-    return fetch(videoUrl, { headers: request.headers });
+    const proxyUrl = new URL(requestUrl.origin);
+    proxyUrl.pathname = `/proxy/${videoUrl}`;
+    return handleProxy(request, proxyUrl);
+
   } catch (error) {
     return new Response(error.message, { status: 500 });
   }
 }
 
+async function handleProxy(request, requestUrl) {
+  const originalUrl = requestUrl.pathname.substring('/proxy/'.length) + requestUrl.search;
+
+  if (!originalUrl) {
+    return new Response("Missing proxied URL", { status: 400 });
+  }
+
+  try {
+    const response = await fetch(originalUrl, { headers: request.headers });
+    const contentType = response.headers.get("Content-Type");
+
+    if (contentType && (contentType.includes("application/vnd.apple.mpegurl") || contentType.includes("application/x-mpegurl"))) {
+      const m3u8Text = await response.text();
+      const rewrittenM3u8 = await rewriteM3u8(m3u8Text, originalUrl);
+
+      const headers = new Headers(response.headers);
+      headers.set("Access-Control-Allow-Origin", "*");
+      return new Response(rewrittenM3u8, { headers });
+    }
+
+    return response;
+
+  } catch (e) {
+    return new Response(e.message, { status: 500 });
+  }
+}
+
 async function handleThumbnail(request) {
-  const url = new URL(request.url);
-  const viewkey = url.searchParams.get("viewkey");
+    const url = new URL(request.url);
+    const viewkey = url.searchParams.get("viewkey");
   if (!viewkey) {
     return new Response("Missing viewkey", { status: 400 });
   }
