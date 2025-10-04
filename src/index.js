@@ -101,7 +101,11 @@ async function handleProxy(request, requestUrl) {
   }
 
   try {
-    const response = await fetch(originalUrl, { headers: request.headers });
+    const newHeaders = new Headers(request.headers);
+    newHeaders.set("Referer", "https://cn.pornhub.com/");
+    newHeaders.set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/58.0.3029.110 Safari/537.36");
+
+    const response = await fetch(originalUrl, { headers: newHeaders });
     const contentType = response.headers.get("Content-Type");
 
     if (contentType && (contentType.includes("application/vnd.apple.mpegurl") || contentType.includes("application/x-mpegurl"))) {
