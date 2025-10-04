@@ -1,0 +1,5 @@
+name = "pornhub-proxy"
+main = "src/index.js"
+compatibility_date = "2023-10-26"
+account_id = "" # You should replace this with your own account_id
+compatibility_flags = [ "nodejs_compat" ]
